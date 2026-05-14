@@ -727,10 +727,12 @@ async function startServer() {
 
       sendEvent({ type: "export_status", stage: "assembling", current: total, total });
 
+      const hasTransitions = Array.isArray(transitions) && transitions.some((t: any) => t.type && t.type !== "none");
+
       let assembledFile: string;
       if (mergedClips.length === 1) {
         assembledFile = mergedClips[0];
-      } else {
+      } else if (!hasTransitions) {
         assembledFile = path.join(exportDir, "assembled.mp4");
         const listFile = path.join(exportDir, "concat.txt");
         fs.writeFileSync(listFile, mergedClips.map(f => `file '${f}'`).join("\n"));
@@ -738,6 +740,49 @@ async function startServer() {
           execFile("ffmpeg", [
             "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", assembledFile,
           ], { maxBuffer: 50 * 1024 * 1024, timeout: 300000 }, (err) => err ? reject(err) : resolve());
+        });
+      } else {
+        assembledFile = path.join(exportDir, "assembled.mp4");
+        const clipDurations: number[] = [];
+        for (const clip of mergedClips) {
+          const dur = getVideoDuration(clip);
+          clipDurations.push(dur);
+        }
+
+        const inputs = mergedClips.flatMap(f => ["-i", f]);
+        const vFilters: string[] = [];
+        const aFilters: string[] = [];
+        let lastV = "[0:v]";
+        let lastA = "[0:a]";
+        let cumulativeOffset = clipDurations[0];
+
+        for (let i = 1; i < mergedClips.length; i++) {
+          const tr = transitions[i - 1] || { type: "none", duration: 0.5 };
+          const tType = tr.type === "none" ? "fade" : tr.type;
+          const tDur = Math.min(tr.duration || 0.5, clipDurations[i - 1] / 2, clipDurations[i] / 2);
+          const offset = Math.max(0, cumulativeOffset - tDur);
+          const outV = i < mergedClips.length - 1 ? `[v${i}]` : "[vout]";
+          const outA = i < mergedClips.length - 1 ? `[a${i}]` : "[aout]";
+
+          vFilters.push(`${lastV}[${i}:v]xfade=transition=${tType}:duration=${tDur.toFixed(2)}:offset=${offset.toFixed(2)}${outV}`);
+          aFilters.push(`${lastA}[${i}:a]acrossfade=d=${tDur.toFixed(2)}:c1=tri:c2=tri${outA}`);
+
+          lastV = outV;
+          lastA = outA;
+          cumulativeOffset = offset + clipDurations[i];
+        }
+
+        const filterComplex = [...vFilters, ...aFilters].join(";");
+
+        await new Promise<void>((resolve, reject) => {
+          execFile("ffmpeg", [
+            ...inputs,
+            "-filter_complex", filterComplex,
+            "-map", "[vout]", "-map", "[aout]",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "192k",
+            assembledFile,
+          ], { maxBuffer: 100 * 1024 * 1024, timeout: 600000 }, (err) => err ? reject(err) : resolve());
         });
       }
 

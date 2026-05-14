@@ -253,6 +253,9 @@ function NarratorApp() {
   const [showSubtitleControls, setShowSubtitleControls] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const TRANSITION_TYPES = ['none', 'fade', 'dissolve', 'wipeleft', 'wiperight', 'slidedown'] as const;
+  type TransitionType = typeof TRANSITION_TYPES[number];
+  const [transitions, setTransitions] = useState<Array<{ type: TransitionType; duration: number }>>([]);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportStage, setExportStage] = useState('');
   const [exportCurrent, setExportCurrent] = useState(0);
@@ -578,6 +581,7 @@ function NarratorApp() {
     setClipIds([]);
     setClipsStage('idle');
     setClipsLoading(false);
+    setTransitions([]);
     setDragIdx(null);
     setDragOverIdx(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -786,6 +790,17 @@ function NarratorApp() {
     segmentTimesRef.current = segmentTimes;
   }, [segmentTimes]);
 
+  useEffect(() => {
+    if (!script) { setTransitions([]); return; }
+    const needed = Math.max(0, script.segments.length - 1);
+    setTransitions(prev => {
+      if (prev.length === needed) return prev;
+      const next = prev.slice(0, needed);
+      while (next.length < needed) next.push({ type: 'none', duration: 0.5 });
+      return next;
+    });
+  }, [script?.segments.length]);
+
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -856,6 +871,7 @@ function NarratorApp() {
           segments: script.segments,
           voice: ttsVoice,
           subtitleStyle: showSubtitles ? { ...subtitleStyle, enabled: true } : { enabled: false },
+          transitions: transitions.some(t => t.type !== 'none') ? transitions : undefined,
         }),
       });
       if (!res.ok) throw new Error('Export failed');
@@ -1316,7 +1332,7 @@ function NarratorApp() {
           </AnimatePresence>
 
           {/* Timeline bar */}
-          <div className="flex items-center gap-0.5 p-3 bg-slate-900 overflow-x-auto">
+          <div className="flex items-center gap-0 p-3 bg-slate-900 overflow-x-auto">
             {script.segments.map((seg, i) => {
               const times = segmentTimes[i];
               const totalDur = script.metadata.totalDurationSeconds || 1;
@@ -1324,28 +1340,81 @@ function NarratorApp() {
               const widthPct = Math.max((segDur / totalDur) * 100, 3);
 
               return (
-                <div
-                  key={i}
-                  draggable
-                  onDragStart={() => setDragIdx(i)}
-                  onDragOver={(e) => { e.preventDefault(); setDragOverIdx(i); }}
-                  onDragEnd={() => { if (dragIdx !== null && dragOverIdx !== null) reorderSegment(dragIdx, dragOverIdx); }}
-                  onClick={() => seekToSegment(i)}
-                  className={`relative shrink-0 h-10 flex items-center justify-center cursor-pointer transition-all border ${
-                    i === currentSegmentIdx
-                      ? 'bg-white text-slate-900 border-white'
-                      : dragOverIdx === i
-                        ? 'bg-slate-600 text-white border-slate-400'
-                        : 'bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600'
-                  }`}
-                  style={{ width: `${widthPct}%`, minWidth: '40px' }}
-                >
-                  <GripVertical size={10} className="absolute left-0.5 opacity-30" />
-                  <span className="text-[9px] font-mono font-bold truncate px-2">{seg.timestamp}</span>
-                </div>
+                <React.Fragment key={i}>
+                  <div
+                    draggable
+                    onDragStart={() => setDragIdx(i)}
+                    onDragOver={(e) => { e.preventDefault(); setDragOverIdx(i); }}
+                    onDragEnd={() => { if (dragIdx !== null && dragOverIdx !== null) reorderSegment(dragIdx, dragOverIdx); }}
+                    onClick={() => seekToSegment(i)}
+                    className={`relative shrink-0 h-10 flex items-center justify-center cursor-pointer transition-all border ${
+                      i === currentSegmentIdx
+                        ? 'bg-white text-slate-900 border-white'
+                        : dragOverIdx === i
+                          ? 'bg-slate-600 text-white border-slate-400'
+                          : 'bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600'
+                    }`}
+                    style={{ width: `${widthPct}%`, minWidth: '40px' }}
+                  >
+                    <GripVertical size={10} className="absolute left-0.5 opacity-30" />
+                    <span className="text-[9px] font-mono font-bold truncate px-2">{seg.timestamp}</span>
+                  </div>
+                  {i < script.segments.length - 1 && transitions[i] && (
+                    <div className="shrink-0 flex flex-col items-center justify-center px-0.5 group relative">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTransitions(prev => {
+                            const next = [...prev];
+                            const cur = TRANSITION_TYPES.indexOf(next[i].type);
+                            next[i] = { ...next[i], type: TRANSITION_TYPES[(cur + 1) % TRANSITION_TYPES.length] };
+                            return next;
+                          });
+                        }}
+                        className={`w-5 h-5 flex items-center justify-center text-[8px] font-bold rounded-sm transition-all ${
+                          transitions[i].type === 'none'
+                            ? 'bg-slate-700 text-slate-500 hover:bg-slate-600 hover:text-slate-300'
+                            : 'bg-amber-500 text-slate-900'
+                        }`}
+                        title={`Transition: ${transitions[i].type} (click to cycle)`}
+                      >
+                        ◆
+                      </button>
+                      {transitions[i].type !== 'none' && (
+                        <span className="text-[7px] text-amber-400 font-mono mt-0.5 whitespace-nowrap">{transitions[i].type}</span>
+                      )}
+                    </div>
+                  )}
+                </React.Fragment>
               );
             })}
           </div>
+          {transitions.some(t => t.type !== 'none') && (
+            <div className="flex items-center gap-3 px-3 py-2 bg-slate-800 text-[10px] text-slate-400 uppercase tracking-widest">
+              <span>◆ Transitions: {transitions.filter(t => t.type !== 'none').length} active</span>
+              <span>·</span>
+              <button
+                onClick={() => setTransitions(prev => prev.map(t => ({ ...t, duration: Math.max(0.3, t.duration - 0.1) })))}
+                className="hover:text-white transition-colors"
+              >
+                Duration −
+              </button>
+              <span className="font-mono text-amber-400">{transitions.find(t => t.type !== 'none')?.duration.toFixed(1)}s</span>
+              <button
+                onClick={() => setTransitions(prev => prev.map(t => ({ ...t, duration: Math.min(1.5, t.duration + 0.1) })))}
+                className="hover:text-white transition-colors"
+              >
+                Duration +
+              </button>
+              <span>·</span>
+              <button
+                onClick={() => setTransitions(prev => prev.map(() => ({ type: 'none' as TransitionType, duration: 0.5 })))}
+                className="hover:text-red-400 transition-colors"
+              >
+                Clear All
+              </button>
+            </div>
+          )}
         </motion.div>
       )}
 
