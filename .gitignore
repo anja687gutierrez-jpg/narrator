@@ -10,3 +10,4 @@ coverage/
 *.mov
 narrator.txt
 Screenshot*
+.ralph-review/
