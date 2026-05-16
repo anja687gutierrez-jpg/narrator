@@ -7,3 +7,6 @@ coverage/
 *.log
 .env*
 !.env.example
+*.mov
+narrator.txt
+Screenshot*

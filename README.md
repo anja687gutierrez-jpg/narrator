@@ -1,53 +1,109 @@
-# Video Narrator
+# Narrator
 
-A local web app that watches your screen recording with Gemini 2.5 Pro and produces a timed narration script — ready to paste into ElevenLabs (or any TTS), then layer over the video in CapCut / Descript / Premiere.
+AI-powered video narration tool. Drop in a screen recording, get back a professional voiceover — script, audio, and final video export included.
 
-Drop in any MP4, MOV, or WebM (up to 2 GB), give Gemini a sentence of context about what the software is, and you get back a storyboard table with timestamps, on-screen action, and voiceover-ready narration. Export as Markdown or JSON.
+![Narrator App](Video%20Narrator%201.png)
 
-## Setup (one time)
+## What it does
 
-1. **Install dependencies**
-   ```bash
-   npm install
-   ```
+1. **AI Script Generation** — Gemini 2.5 Flash watches your video frame-by-frame and writes timestamped narration
+2. **Built-in TTS** — 6 Microsoft Edge voices, no API key required
+3. **Clip Splitting** — Export individual clips per segment with embedded audio
+4. **Transitions** — Fade, dissolve, wipe, and slide between clips
+5. **Subtitle Burning** — Bake SRT subtitles directly into the final video
+6. **One-Click Export** — Full pipeline: cut → voice → merge → transitions → subtitles → MP4
 
-2. **Add your Gemini API key**
-   Grab one (free tier is plenty) at https://aistudio.google.com/apikey
-   ```bash
-   cp .env.example .env
-   ```
-   Open `.env` and replace `MY_GEMINI_API_KEY` with your actual key.
+![Timeline Editor](Video%20Narrator%202.png)
 
-3. **Run it**
-   ```bash
-   npm run dev
-   ```
-   Open http://localhost:3000
+## Prerequisites
 
-## How to use
+- **Node.js** 18+
+- **ffmpeg** (with ffprobe)
+  ```bash
+  # macOS
+  brew install ffmpeg
 
-1. Drop in your screen recording
-2. (Recommended) Paste a sentence of context — e.g. *"STAP Operations Portal — internal tool for transit advertising ops. Audience: ops managers reviewing the receivables workflow."* This dramatically improves the script quality versus letting Gemini guess.
-3. Choose segment density (8s = dense, 12s = balanced, 20s = sparse) and pacing (WPM)
-4. Click **Generate Narration**. Upload takes ~30s, generation takes 30s–2min depending on video length.
-5. **Copy Narration** → paste into ElevenLabs. Or **Markdown** for the full storyboard.
+  # Ubuntu/Debian
+  sudo apt install ffmpeg
 
-## Workflow (full pipeline)
+  # Windows (via chocolatey)
+  choco install ffmpeg
+  ```
 
-1. Record screen → 2. Generate script here → 3. Paste narration into ElevenLabs → 4. Download MP3 → 5. Drop into CapCut / Descript, sync to video, export.
+## Setup
 
-## Configuration knobs
+```bash
+git clone https://github.com/anja687gutierrez-jpg/narrator.git
+cd narrator
+npm install
+cp .env.example .env
+```
 
-- **Model:** `MODEL` constant in `server.ts`. Default is `gemini-2.5-pro`. Swap to `gemini-2.5-flash` for ~5× speed and lower cost, at the expense of some script quality.
-- **Max video size:** `multer` limit in `server.ts` (default 2 GB)
-- **Polling timeout:** 5 minutes in `server.ts` — long enough for ~1 hr videos
+Open `.env` and add your Gemini API key (free tier works):
+```
+GEMINI_API_KEY=your_key_here
+```
 
-## Files
+Get one at https://aistudio.google.com/apikey
 
-- `server.ts` — Express server: upload to Gemini Files API, poll, generate
-- `src/App.tsx` — React UI
-- `uploads/` — temp dir for local video copies, auto-cleaned after upload to Gemini
+```bash
+npm run dev
+```
 
-## Costs
+Open http://localhost:3000
 
-Gemini 2.5 Pro charges per video-second processed plus output tokens. A 5-minute screen recording with a ~600-word script runs roughly $0.05–0.15 on the paid tier. The free tier covers light use.
+## Usage
+
+1. Drop in your video (MP4, MOV, WebM, AVI, MKV — up to 2 GB)
+2. Add context about what's on screen (improves script quality significantly)
+3. Choose segment density and pacing
+4. Click **Generate Narration**
+5. Edit the script inline if needed
+6. **Generate Audio** for standalone MP3, **Split into Clips** for per-segment videos, or **Export Final** for a complete narrated video
+
+![Export Pipeline](Video%20Narrator%203.png)
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEMINI_API_KEY` | — | Required. Get from aistudio.google.com |
+| `APP_PASSWORD` | — | Optional. Adds password protection |
+| `PORT` | 3000 | Server port |
+| `FRAME_INTERVAL` | 5 | Seconds between extracted frames |
+| `BATCH_SIZE` | 12 | Frames per Gemini API call |
+
+## How it works
+
+```
+Video → ffmpeg frame extraction → Gemini 2.5 Flash (batched analysis)
+     → timestamped narration script → Edge TTS → audio segments
+     → ffmpeg merge (video + audio + transitions + subtitles) → final MP4
+```
+
+The server uses Server-Sent Events (SSE) for real-time progress during generation. All processing happens locally — your video never leaves your machine (only extracted frames are sent to Gemini).
+
+## Cost
+
+Gemini 2.5 Flash is fast and cheap. A 5-minute video costs roughly $0.01–0.05 on the paid tier. The free tier (20 requests/day) handles light use.
+
+## Tech Stack
+
+- **Backend:** Express + TypeScript + Gemini API + node-edge-tts
+- **Frontend:** React 19 + Tailwind CSS + Motion (Framer)
+- **Video:** ffmpeg for all extraction, merging, and encoding
+- **Build:** Vite + esbuild
+
+## Scripts
+
+```bash
+npm run dev      # Development server with hot reload
+npm run build    # Production build
+npm run start    # Run production server
+npm run clean    # Remove dist/ and uploads/
+npm run lint     # TypeScript type checking
+```
+
+## License
+
+MIT
