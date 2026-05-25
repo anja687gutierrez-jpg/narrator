@@ -10,6 +10,9 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+const FFPROBE = process.env.FFPROBE_PATH || "ffprobe";
+const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
+
 if (!process.env.GEMINI_API_KEY) {
   console.error("\n  Missing GEMINI_API_KEY. Copy .env.example to .env and paste your key from aistudio.google.com/apikey\n");
   process.exit(1);
@@ -27,17 +30,27 @@ interface Registry {
   exports: Record<string, string>;
 }
 
+function resolvePath(p: string): string {
+  return path.isAbsolute(p) ? p : path.join(UPLOAD_DIR, p);
+}
+
 function loadRegistry(): Registry {
   try {
     if (fs.existsSync(REGISTRY_PATH)) {
       const data = JSON.parse(fs.readFileSync(REGISTRY_PATH, "utf-8"));
       const videos: Record<string, string> = {};
       for (const [id, p] of Object.entries(data.videos ?? {})) {
-        if (typeof p === "string" && fs.existsSync(p)) videos[id] = p;
+        if (typeof p === "string") {
+          const resolved = resolvePath(p);
+          if (fs.existsSync(resolved)) videos[id] = resolved;
+        }
       }
       const exports: Record<string, string> = {};
       for (const [id, p] of Object.entries(data.exports ?? {})) {
-        if (typeof p === "string" && fs.existsSync(p)) exports[id] = p;
+        if (typeof p === "string") {
+          const resolved = resolvePath(p);
+          if (fs.existsSync(resolved)) exports[id] = resolved;
+        }
       }
       return { videos, exports };
     }
@@ -45,10 +58,14 @@ function loadRegistry(): Registry {
   return { videos: {}, exports: {} };
 }
 
+function toRelativePath(p: string): string {
+  return p.startsWith(UPLOAD_DIR) ? path.relative(UPLOAD_DIR, p) : p;
+}
+
 function saveRegistry(videos: Map<string, { path: string }>, exports: Map<string, string>): void {
   const data: Registry = {
-    videos: Object.fromEntries([...videos].map(([k, v]) => [k, v.path])),
-    exports: Object.fromEntries(exports),
+    videos: Object.fromEntries([...videos].map(([k, v]) => [k, toRelativePath(v.path)])),
+    exports: Object.fromEntries([...exports].map(([k, v]) => [k, toRelativePath(v)])),
   };
   fs.writeFileSync(REGISTRY_PATH, JSON.stringify(data, null, 2));
 }
@@ -72,7 +89,7 @@ const MAX_FRAMES = 360;
 
 function getVideoDuration(filePath: string): number {
   const out = execFileSync(
-    "ffprobe",
+    FFPROBE,
     ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", filePath],
     { encoding: "utf-8" }
   );
@@ -87,7 +104,7 @@ function extractFrames(filePath: string, intervalSec: number): Promise<string[]>
 
   return new Promise((resolve, reject) => {
     execFile(
-      "ffmpeg",
+      FFMPEG,
       ["-i", filePath, "-vf", `fps=1/${intervalSec}`, "-q:v", "3", "-f", "image2", pattern],
       { maxBuffer: 50 * 1024 * 1024, timeout: 300000 },
       (err) => {
@@ -201,6 +218,15 @@ async function startServer() {
     console.error("\n  Missing APP_PASSWORD in .env. All API routes will be locked.\n");
   }
   app.use("/api", (req: Request, res: Response, next) => {
+    if (req.method === "OPTIONS") {
+      res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
+      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.sendStatus(204);
+      return;
+    }
+    res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
     if (!APP_PASSWORD) { res.status(503).json({ error: "Server misconfigured." }); return; }
     const auth = req.headers.authorization;
     const queryToken = req.query.token as string | undefined;
@@ -413,7 +439,7 @@ async function startServer() {
         const listFile = path.join(ttsDir, "concat.txt");
         fs.writeFileSync(listFile, partFiles.map(f => `file '${f}'`).join("\n"));
         await new Promise<void>((resolve, reject) => {
-          execFile("ffmpeg", ["-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", finalFile],
+          execFile(FFMPEG, ["-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", finalFile],
             { maxBuffer: 10 * 1024 * 1024, timeout: 300000 },
             (err) => err ? reject(err) : resolve()
           );
@@ -573,7 +599,7 @@ async function startServer() {
         sendEvent({ type: "clips_status", stage: "cutting", clip: i + 1, total });
 
         await new Promise<void>((resolve, reject) => {
-          execFile("ffmpeg", [
+          execFile(FFMPEG, [
             "-ss", String(startSec), "-to", String(endSec),
             "-i", videoPath, "-c", "copy", "-an", clipVideo,
           ], { maxBuffer: 50 * 1024 * 1024, timeout: 300000 }, (err) => err ? reject(err) : resolve());
@@ -592,7 +618,7 @@ async function startServer() {
         sendEvent({ type: "clips_status", stage: "merging", clip: i + 1, total });
 
         await new Promise<void>((resolve, reject) => {
-          execFile("ffmpeg", [
+          execFile(FFMPEG, [
             "-i", clipVideo, "-i", clipAudio,
             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
             "-map", "0:v:0", "-map", "1:a:0", "-shortest", clipFinal,
@@ -696,7 +722,7 @@ async function startServer() {
         sendEvent({ type: "export_status", stage: "cutting", current: i + 1, total });
 
         await new Promise<void>((resolve, reject) => {
-          execFile("ffmpeg", [
+          execFile(FFMPEG, [
             "-ss", String(startSec), "-to", String(endSec),
             "-i", videoPath, "-c", "copy", "-an", clipVideo,
           ], { maxBuffer: 50 * 1024 * 1024, timeout: 300000 }, (err) => err ? reject(err) : resolve());
@@ -711,7 +737,7 @@ async function startServer() {
           sendEvent({ type: "export_status", stage: "merging", current: i + 1, total });
 
           await new Promise<void>((resolve, reject) => {
-            execFile("ffmpeg", [
+            execFile(FFMPEG, [
               "-i", clipVideo, "-i", clipAudio,
               "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
               "-map", "0:v:0", "-map", "1:a:0", "-shortest", clipMerged,
@@ -737,7 +763,7 @@ async function startServer() {
         const listFile = path.join(exportDir, "concat.txt");
         fs.writeFileSync(listFile, mergedClips.map(f => `file '${f}'`).join("\n"));
         await new Promise<void>((resolve, reject) => {
-          execFile("ffmpeg", [
+          execFile(FFMPEG, [
             "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", assembledFile,
           ], { maxBuffer: 50 * 1024 * 1024, timeout: 300000 }, (err) => err ? reject(err) : resolve());
         });
@@ -775,7 +801,7 @@ async function startServer() {
         const filterComplex = [...vFilters, ...aFilters].join(";");
 
         await new Promise<void>((resolve, reject) => {
-          execFile("ffmpeg", [
+          execFile(FFMPEG, [
             ...inputs,
             "-filter_complex", filterComplex,
             "-map", "[vout]", "-map", "[aout]",
@@ -794,7 +820,7 @@ async function startServer() {
         fs.writeFileSync(srtFile, buildSrt(segments, duration));
         const subtitledFile = path.join(exportDir, "subtitled.mp4");
         await new Promise<void>((resolve, reject) => {
-          execFile("ffmpeg", [
+          execFile(FFMPEG, [
             "-i", assembledFile, "-i", srtFile,
             "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text",
             "-metadata:s:s:0", "language=eng",
@@ -897,7 +923,7 @@ async function startServer() {
     app.get("*", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  app.listen(PORT, "127.0.0.1", () => {
+  app.listen(PORT, process.env.HOST || "0.0.0.0", () => {
     console.log(`\n  Narrator running → http://localhost:${PORT}\n`);
   });
 }

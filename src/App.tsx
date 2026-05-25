@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 
 const AUTH_KEY = 'narrator-auth';
+const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 function getAuth(): string {
   return localStorage.getItem(AUTH_KEY) || '';
@@ -20,13 +21,15 @@ function authHeaders(): Record<string, string> {
 }
 
 function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  const fullUrl = url.startsWith('/api') ? `${API_BASE}${url}` : url;
   const headers = { ...authHeaders(), ...(init?.headers || {}) };
-  return fetch(url, { ...init, headers });
+  return fetch(fullUrl, { ...init, headers });
 }
 
-function mediaUrl(path: string): string {
+function mediaUrl(p: string): string {
   const token = getAuth();
-  return token ? `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : path;
+  const full = p.startsWith('/api') ? `${API_BASE}${p}` : p;
+  return token ? `${full}${full.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : full;
 }
 
 interface ScriptSegment {
